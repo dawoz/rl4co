@@ -31,6 +31,7 @@ class SMTWTPGenerator(Generator):
     Returns:
         A TensorDict with the following key:
             job_due_time [batch_size, num_job + 1]: the due time of each job
+            job_release_time [batch_size, num_job + 1]: the release time of each job
             job_weight [batch_size, num_job + 1]: the weight of each job
             job_process_time [batch_size, num_job + 1]: the process time of each job
     """
@@ -43,6 +44,7 @@ class SMTWTPGenerator(Generator):
         max_job_weight: float = 1,
         min_process_time: float = 0,
         max_process_time: float = 1,
+        release_times: bool = False,
         **unused_kwargs
     ):
         self.num_job = num_job
@@ -52,6 +54,7 @@ class SMTWTPGenerator(Generator):
         self.max_job_weight = max_job_weight
         self.min_process_time = min_process_time
         self.max_process_time = max_process_time
+        self.release_times = release_times
 
         # SMTWTP environment doen't have any other kwargs
         if len(unused_kwargs) > 0:
@@ -64,6 +67,11 @@ class SMTWTPGenerator(Generator):
             torch.FloatTensor(*batch_size, self.num_job + 1)
             .uniform_(self.min_time_span, self.max_time_span)
         )
+        if self.release_times:
+            job_release_time = torch.FloatTensor(*batch_size, self.num_job + 1).uniform_()
+            job_release_time = job_release_time * (job_due_time - self.min_time_span) + self.min_time_span
+        else:
+            job_release_time = torch.zeros(*batch_size, self.num_job + 1)
         job_weight = (
             torch.FloatTensor(*batch_size, self.num_job + 1)
             .uniform_(self.min_job_weight, self.max_job_weight)
@@ -75,12 +83,14 @@ class SMTWTPGenerator(Generator):
 
         # Rollouts begin at dummy node 0, whose features are set to 0
         job_due_time[:, 0] = 0
+        job_release_time[:, 0] = 0
         job_weight[:, 0] = 0
         job_process_time[:, 0] = 0
 
         return TensorDict(
             {
                 "job_due_time": job_due_time,
+                "job_release_time": job_release_time,
                 "job_weight": job_weight,
                 "job_process_time": job_process_time,
             },

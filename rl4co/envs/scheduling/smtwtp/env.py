@@ -30,6 +30,7 @@ class SMTWTPEnv(RL4COEnvBase):
 
     Observation:
         - job_due_time: the due time of each job
+        - job_release_time: the release time of each job
         - job_weight: the weight of each job
         - job_process_time: the process time of each job
         - current_node: the current node
@@ -44,6 +45,7 @@ class SMTWTPEnv(RL4COEnvBase):
         - max_job_weight: upper bound of jobs' weights
         - min_process_time: lower bound of jobs' process time. By default, jobs' process time is uniformly sampled from (min_process_time, max_process_time)
         - max_process_time: upper bound of jobs' process time
+        - release_times: whether to include release times
 
     Finishing condition:
         - All jobs are processed
@@ -53,7 +55,7 @@ class SMTWTPEnv(RL4COEnvBase):
         - In that case, the reward is (-)objective value of the processing order: maximizing the reward is equivalent to minimizing the objective.
 
     Args:
-        generator: FFSPGenerator instance as the data generator
+        generator: SMTWTPGenerator as insstance generator
         generator_params: parameters for the generator
     """
 
@@ -63,12 +65,14 @@ class SMTWTPEnv(RL4COEnvBase):
         self,
         generator: SMTWTPGenerator = None,
         generator_params: dict = {},
+        feasibility_penalty: float = 0.0,
         **kwargs,
     ):
         super().__init__(**kwargs)
         if generator is None:
             generator = SMTWTPGenerator(**generator_params)
         self.generator = generator
+        self.feasibility_penalty = feasibility_penalty
         self._make_spec(self.generator)
 
     @staticmethod
@@ -107,6 +111,7 @@ class SMTWTPEnv(RL4COEnvBase):
         device = td.device
 
         init_job_due_time = td["job_due_time"]
+        init_job_release_time = td["job_release_time"]
         init_job_process_time = td["job_process_time"]
         init_job_weight = td["job_weight"]
 
@@ -121,6 +126,7 @@ class SMTWTPEnv(RL4COEnvBase):
         return TensorDict(
             {
                 "job_due_time": init_job_due_time,
+                "job_release_time": init_job_release_time,
                 "job_weight": init_job_weight,
                 "job_process_time": init_job_process_time,
                 "current_job": current_job,
@@ -133,6 +139,12 @@ class SMTWTPEnv(RL4COEnvBase):
     def _make_spec(self, generator: SMTWTPGenerator) -> None:
         self.observation_spec = CompositeSpec(
             job_due_time=BoundedTensorSpec(
+                low=generator.min_time_span,
+                high=generator.max_time_span,
+                shape=(generator.num_job + 1,),
+                dtype=torch.float32,
+            ),
+            job_release_time=BoundedTensorSpec(
                 low=generator.min_time_span,
                 high=generator.max_time_span,
                 shape=(generator.num_job + 1,),
@@ -174,7 +186,20 @@ class SMTWTPEnv(RL4COEnvBase):
         self.done_spec = UnboundedDiscreteTensorSpec(shape=(1,), dtype=torch.bool)
 
     def _get_reward(self, td, actions) -> TensorDict:
+        out = self.get_extra_metrics(td, actions)
+        return out.get("reward")
+
+    def check_solution_validity(self, td, actions):
+        log.warning("Checking solution validity is not implemented for SMTWTP")
+        pass
+
+    @staticmethod
+    def render(td, actions=None, ax=None):
+        return render(td, actions, ax)
+    
+    def get_extra_metrics(self, td, actions):
         job_due_time = td["job_due_time"]
+        job_release_time = td["job_release_time"]
         job_weight = td["job_weight"]
         job_process_time = td["job_process_time"]
 
@@ -184,6 +209,7 @@ class SMTWTPEnv(RL4COEnvBase):
 
         ordered_process_time = job_process_time[batch_idx, actions]
         ordered_due_time = job_due_time[batch_idx, actions]
+        ordered_release_time = job_release_time[batch_idx, actions]
         ordered_job_weight = job_weight[batch_idx, actions]
         presum_process_time = torch.cumsum(
             ordered_process_time, dim=1
@@ -191,13 +217,21 @@ class SMTWTPEnv(RL4COEnvBase):
         job_tardiness = presum_process_time - ordered_due_time
         job_tardiness[job_tardiness < 0] = 0
         job_weighted_tardiness = ordered_job_weight * job_tardiness
+        
+        # penalize jobs that start before their release time
+        ordered_start_time = presum_process_time - ordered_process_time
+        ordered_start_time += ordered_release_time[:, 0, None]  # add release time of the first scheduled job
+        job_too_early_time = (ordered_release_time - ordered_start_time).clamp(min=0)
 
-        return -job_weighted_tardiness.sum(-1)
-
-    def check_solution_validity(self, td, actions):
-        log.warning("Checking solution validity is not implemented for SMTWTP")
-        pass
-
-    @staticmethod
-    def render(td, actions=None, ax=None):
-        raise render(td, actions, ax)
+        weghted_tardiness = job_weighted_tardiness.sum(-1)
+        too_early_time = job_too_early_time.sum(-1)
+        feasibility = (too_early_time == 0).float()
+        reward = - weghted_tardiness - self.feasibility_penalty * too_early_time
+        
+        return {
+            "reward": reward,
+            "total_weighted_tardiness": weghted_tardiness,
+            "too_early_time": too_early_time,
+            "feasibility": feasibility
+        }
+        

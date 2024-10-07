@@ -341,20 +341,22 @@ class SMTWTPInitEmbedding(nn.Module):
     """Initial embedding for the Single Machine Total Weighted Tardiness Problem (SMTWTP).
     Embed the following node features to the embedding space:
         - job_due_time: due time of the jobs
+        - job_release_time: release time of the jobs
         - job_weight: weights of the jobs
         - job_process_time: the processing time of jobs
     """
 
     def __init__(self, embed_dim, linear_bias=True):
         super(SMTWTPInitEmbedding, self).__init__()
-        node_dim = 3  # job_due_time, job_weight, job_process_time
+        node_dim = 4  # job_due_time, job_release_time, job_weight, job_process_time
         self.init_embed = nn.Linear(node_dim, embed_dim, linear_bias)
 
     def forward(self, td):
         job_due_time = td["job_due_time"]
+        job_release_time = td["job_release_time"]
         job_weight = td["job_weight"]
         job_process_time = td["job_process_time"]
-        feat = torch.stack((job_due_time, job_weight, job_process_time), dim=-1)
+        feat = torch.stack((job_due_time, job_release_time, job_weight, job_process_time), dim=-1)
         out = self.init_embed(feat)
         return out
 
