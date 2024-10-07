@@ -160,6 +160,7 @@ class ConstructivePolicy(nn.Module):
         env: Optional[Union[str, RL4COEnvBase]] = None,
         phase: str = "train",
         calc_reward: bool = True,
+        calc_extra_metrics: bool = True,
         return_actions: bool = False,
         return_entropy: bool = False,
         return_hidden: bool = False,
@@ -245,15 +246,23 @@ class ConstructivePolicy(nn.Module):
         # Post-decoding hook: used for the final step(s) of the decoding strategy
         logprobs, actions, td, env = decode_strategy.post_decoder_hook(td, env)
 
-        # Output dictionary construction
-        if calc_reward:
-            td.set("reward", env.get_reward(td, actions))
+        # Output dictionary construction       
+        if calc_extra_metrics:
+            try:
+                extra_metrics = env.get_extra_metrics(td, actions)                
+            except (AttributeError, NotImplementedError):
+                log.warning("No extra metrics available")
+                extra_metrics = {}       
+        elif calc_reward:
+            extra_metrics = {"reward":  env.get_reward(td, actions)}
 
+        for k, v in extra_metrics.items():
+            td.set(k, v)
         outdict = {
-            "reward": td["reward"],
             "log_likelihood": get_log_likelihood(
                 logprobs, actions, td.get("mask", None), return_sum_log_likelihood
             ),
+            **extra_metrics,
         }
 
         if return_actions:
